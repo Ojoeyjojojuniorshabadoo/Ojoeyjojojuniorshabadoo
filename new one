@@ -1,0 +1,124 @@
+-- CONFIG: set the target folder as a POSIX path without trailing slash
+property attachmentsPath : "/Users/beatrixwillius/Documents"
+
+-- sanity check
+if not my dirExists(attachmentsPath) then
+  display dialog "Folder not found: " & attachmentsPath
+  return
+end if
+
+using terms from application "Mail"
+  on perform mail action with messages theMessages for rule theRule
+    repeat with theMessage in theMessages
+      try
+        set theAttachments to mail attachments of theMessage
+        if (count of theAttachments) = 0 then exit repeat
+
+        set theSubject to subject of theMessage as text
+        set theSender to sender of theMessage as text
+
+        set folderName to my sanitize(theSender & " " & theSubject)
+        if folderName = "" then set folderName to "untitled"
+        set destDir to attachmentsPath & "/" & folderName
+
+        -- make destination folder idempotently
+        do shell script "mkdir -p " & quoted form of destDir
+
+        repeat with theAttachment in theAttachments
+          set originalName to name of theAttachment as text
+          set safeName to my sanitize(originalName)
+          if safeName = "" then set safeName to "attachment"
+
+          set outPath to destDir & "/" & safeName
+          set outPath to my uniquePath(outPath) -- avoid overwrite
+
+          save theAttachment in POSIX file outPath
+        end repeat
+
+      on error errMsg number errNr
+        display dialog "Error: " & errMsg & " Nr.: " & errNr
+      end try
+    end repeat
+  end perform mail action with messages
+end using terms from
+
+
+-- UTILITIES
+
+on dirExists(p) -- p = POSIX path string
+  try
+    do shell script "test -d " & quoted form of p
+    return true
+  on error
+    return false
+  end try
+end dirExists
+
+on sanitize(t as text)
+  set s to t as text
+  -- replace line breaks with spaces
+  set s to my replaceText(s, return, " ")
+  set s to my replaceText(s, linefeed, " ")
+
+  -- strip characters illegal or annoying in filenames
+  set s to my replaceText(s, "\"", "") -- remove double quotes
+  set badChars to {":", "/", "\\", "*", "?", "<", ">", "|"}
+  repeat with c in badChars
+    set s to my replaceText(s, c as text, "_")
+  end repeat
+
+  -- collapse repeated spaces
+  repeat while s contains "  "
+    set s to my replaceText(s, "  ", " ")
+  end repeat
+
+  set s to my trim(s)
+
+  -- limit filename length
+  if (count characters of s) > 100 then set s to text 1 thru 100 of s
+  return s
+end sanitize
+
+on replaceText(theText as text, findStr as text, replStr as text)
+  set oldDelims to AppleScript's text item delimiters
+  set AppleScript's text item delimiters to findStr
+  set parts to text items of theText
+  set AppleScript's text item delimiters to replStr
+  set newText to parts as text
+  set AppleScript's text item delimiters to oldDelims
+  return newText
+end replaceText
+
+on trim(s as text)
+  set blanks to {" ", tab, return, linefeed}
+  if s = "" then return s
+  repeat while (s ≠ "") and (blanks contains character 1 of s)
+    set s to (text 2 thru -1 of s)
+  end repeat
+  if s = "" then return s
+  repeat while (blanks contains character -1 of s)
+    set s to (text 1 thru -2 of s)
+  end repeat
+  return s
+end trim
+
+on uniquePath(p as text) -- returns p or p with (n) suffix to avoid collisions
+  set sh to "
+p=" & quoted form of p & ";
+if [ -e \"$p\" ]; then
+  dir=$(dirname \"$p\")
+  file=$(basename \"$p\")
+  name=\"${file%.*}\"
+  ext=\"${file##*.}\"
+  [ \"$ext\" = \"$file\" ] && ext=\"\"
+  i=1
+  while :; do
+    if [ -z \"$ext\" ]; then candidate=\"$dir/$name ($i)\"; else candidate=\"$dir/$name ($i).$ext\"; fi
+    [ ! -e \"$candidate\" ] && echo \"$candidate\" && break
+    i=$((i+1))
+  done
+else
+  echo \"$p\"
+fi"
+  return do shell script sh
+end uniquePath
